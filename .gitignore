@@ -1,0 +1,19 @@
+vibecheck
+vibecheck.exe
+/dist
+/bin
+*.out
+
+# local demo project (contains intentionally-vulnerable sample code)
+testdata/demo-app/
+
+# local-only scratch
+TELEGRAM_POST.md
+TEST_COMMANDS.md
+PRE_PUSH_CHECKLIST.md
+notes.md
+scratch/
+
+.idea/
+.vscode/
+.DS_Store

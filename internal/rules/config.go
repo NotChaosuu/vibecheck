@@ -1,0 +1,97 @@
+package rules
+
+import "github.com/NotChaosuu/vibecheck/internal/model"
+
+func configRules() []Rule {
+	return []Rule{
+		{
+			ID: "firebase-rules-open", Title: "Firebase rules allow public read/write",
+			Severity: model.Critical, Confidence: model.Confirmed,
+			OWASP:   "A01:2021 Broken Access Control",
+			Detail:  "A Firestore/Storage rule grants access with `if true`, or an RTDB rule sets read/write to true. Anyone with the project ID owns the database.",
+			Fix:     "Replace `if true` with `request.auth != null` plus per-document ownership checks.",
+			Names:   []string{"firestore.rules", "storage.rules", "database.rules.json"},
+			Pattern: mustRE(`(?i)(allow\s+[a-z, ]*:\s*if\s+true\b|"\.(read|write)"\s*:\s*true)`),
+			Allow:   reList(`if\s+false`),
+		},
+		{
+			ID: "firebase-rules-any-authed", Title: "Firebase rules allow any signed-in user full access",
+			Severity: model.High, Confidence: model.Review,
+			OWASP:   "A01:2021 Broken Access Control",
+			Detail:  "A rule grants read+write to any authenticated user (`if request.auth != null`) with no ownership check. Fine for genuinely shared data, a leak for per-user data.",
+			Fix:     "Scope the rule to the owner, e.g. `request.auth.uid == resource.data.owner`.",
+			Names:   []string{"firestore.rules", "storage.rules"},
+			Pattern: mustRE(`(?i)allow\s+read\s*,\s*write\s*:\s*if\s+request\.auth\s*!=\s*null\s*;`),
+		},
+		{
+			ID: "jwt-alg-none", Title: "JWT accepts the 'none' algorithm",
+			Severity: model.Critical, Confidence: model.Confirmed,
+			OWASP:   "A02:2021 Cryptographic Failures",
+			Detail:  "A JWT is signed or verified with algorithm 'none', which disables signature checking. Tokens can be forged.",
+			Fix:     "Pin an explicit algorithm allowlist, e.g. algorithms: ['HS256'].",
+			Pattern: mustRE(`(?i)(alg|algorithms?)\s*[:=]\s*\[?\s*["']none["']`),
+		},
+		{
+			ID: "jwt-hardcoded-secret", Title: "JWT signing secret is hardcoded",
+			Severity: model.High, Confidence: model.Confirmed,
+			OWASP:   "A02:2021 Cryptographic Failures",
+			Detail:  "A JWT is signed with a string literal instead of a secret loaded from the environment. Leaking the source leaks the signing key.",
+			Fix:     "Load the secret from an env var and rotate the current one.",
+			Pattern: mustRE(`(?i)jwt\.(sign|encode)\s*\([^,]+,\s*["'][^"']{3,}["']`),
+			Allow:   reList(`process\.env`, `os\.getenv`, `os\.environ`, `getenv`, `config\.`, `settings\.`, `secrets\.`),
+		},
+		{
+			ID: "jwt-decode-no-verify", Title: "JWT decoded without verifying the signature",
+			Severity: model.High, Confidence: model.Review,
+			OWASP:   "A07:2021 Identification & Authentication Failures",
+			Detail:  "Signature verification is disabled (`verify_signature: False` / bare `jwt.decode`). The token's claims are attacker-controlled.",
+			Fix:     "Verify the signature with a known key and algorithm before trusting claims.",
+			Pattern: mustRE(`(?i)verify_signature["']?\s*:\s*False`),
+		},
+		{
+			ID: "tls-verification-disabled", Title: "TLS certificate verification disabled",
+			Severity: model.High, Confidence: model.Confirmed,
+			OWASP:       "A02:2021 Cryptographic Failures",
+			Detail:      "Certificate verification is turned off, so the connection is open to man-in-the-middle. Usually added to silence a cert error during debugging and never removed.",
+			Fix:         "Remove the flag and trust a proper CA bundle instead.",
+			Pattern:     mustRE(`(InsecureSkipVerify\s*:\s*true|rejectUnauthorized\s*:\s*false|NODE_TLS_REJECT_UNAUTHORIZED|verify\s*=\s*False|_create_unverified_context|ssl\.CERT_NONE)`),
+			SkipInTests: true,
+		},
+		{
+			ID: "debug-mode-enabled", Title: "Debug mode enabled",
+			Severity: model.High, Confidence: model.Review,
+			OWASP:   "A05:2021 Security Misconfiguration",
+			Detail:  "A debug flag is set to True. Flask's debugger exposes an interactive console (remote code execution); Django DEBUG leaks settings and stack traces.",
+			Fix:     "Drive the flag from an env var and default it to off in production.",
+			Exts:    []string{".py"},
+			Pattern: mustRE(`(?i)\bdebug\s*=\s*True\b`),
+			Allow:   reList(`os\.environ`, `getenv`, `env\(`, `config\[`),
+		},
+		{
+			ID: "env-dump-endpoint", Title: "Endpoint returns process environment",
+			Severity: model.Critical, Confidence: model.Confirmed,
+			OWASP:   "A05:2021 Security Misconfiguration",
+			Detail:  "A handler serializes process.env to the response, dumping every secret in the environment to anyone who hits the route.",
+			Fix:     "Remove the debug route. Never return environment variables to a client.",
+			Pattern: mustRE(`res\.(json|send)\s*\(\s*process\.env\b`),
+		},
+		{
+			ID: "nextpublic-secret-name", Title: "Secret exposed via NEXT_PUBLIC_ prefix",
+			Severity: model.High, Confidence: model.Review,
+			OWASP:   "A05:2021 Security Misconfiguration",
+			Detail:  "A NEXT_PUBLIC_ / VITE_ / REACT_APP_ variable is named like a secret. These prefixes inline the value into the browser bundle at build time, so it is not secret.",
+			Fix:     "Drop the public prefix and call the API from a server component/route instead.",
+			Pattern: mustRE(`(?i)(NEXT_PUBLIC_|VITE_|REACT_APP_|EXPO_PUBLIC_)[A-Z0-9_]*(SECRET|SERVICE_ROLE|PRIVATE|PASSWORD|_API_KEY)`),
+			Allow:   reList(`(?i)(PUBLISHABLE|ANON|_URL\b|_ID\b)`),
+		},
+		{
+			ID: "postmessage-wildcard-origin", Title: "postMessage sends to any origin",
+			Severity: model.Medium, Confidence: model.Confirmed,
+			OWASP:   "A05:2021 Security Misconfiguration",
+			Detail:  "postMessage is called with targetOrigin '*', so the message is delivered to whatever origin currently frames the page.",
+			Fix:     "Pass an explicit target origin, e.g. postMessage(data, 'https://app.example.com').",
+			Exts:    []string{".js", ".jsx", ".ts", ".tsx", ".vue", ".svelte"},
+			Pattern: mustRE(`postMessage\s*\([^,]+,\s*['"]\*['"]`),
+		},
+	}
+}
