@@ -1,5 +1,5 @@
-vibecheck
-vibecheck.exe
+/vibecheck
+/vibecheck.exe
 /dist
 /bin
 *.out
